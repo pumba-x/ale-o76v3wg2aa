@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; manifest-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Ale Game</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ale Game">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<link rel="icon" href="assets/icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#120d16">
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0810; overflow: hidden; overscroll-behavior: none;
+    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  /* ничто в игре не выделяется, не копируется и не перетаскивается: долгое нажатие на iPhone включает экранную лупу выделения (владелец 15.10.2026: «если зажать пальцем в какое-то место, может включиться лупа»);
+     запрет стоит на каждом элементе, а не только на корне, а сами касания отменяет Touch._guardPress (src/touch.js) */
+  *, *::before, *::after { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-user-drag: none; }
+  canvas#game { position: fixed; left: 0; top: 0; display: block; image-rendering: auto; outline: none; }
+  #rotate { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; flex-direction: column; background: #120d16; color: #ffe9c4; font: bold 22px system-ui, sans-serif;
+    align-items: center; justify-content: center; text-align: center; padding: 24px; z-index: 50; }
+  #rotate small { margin-top: 16px; max-width: 28em; font: 500 15px/1.4 system-ui, sans-serif; opacity: 0.78; }          /* на iPhone с включённой блокировкой книжной ориентации экран не поворачивается, и без подсказки игра казалась мёртвой (18.10.2026) */
+  body.touch-ui.portrait #rotate { display: flex; }
+  /* сенсорное управление: «наклейки» в одном стиле с меню и клавишами в подсказках (кремовый круг, тёмно-сливовый контур, значок-картинка из src/icons.js).
+     Весь слой #touch ставится ровно на прямоугольник игры (Touch.layout из Game.resize): кнопки не выходят за края картины, даже когда окно шире или выше неё.
+     Кнопки прозрачные (кремовая заливка 30 %) и небольшие; обе группы стоят одним рядом по самому низу кадра, на полосе пола: герои и враги идут по линии на 83 % высоты кадра, выше неё ничего не закрыто
+     (владелец 13.10.2026: «более прозрачные; справа, куда идёт персонаж, должно быть лучше видно; кнопки слишком большие, особенно прыжок»). */
+  #touch { position: fixed; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 20; display: none; --b: clamp(46px, 15vmin, 84px); }          /* размер кнопки b кладёт Touch.layout; место и размер каждой кнопки — тоже он (раскладки в src/touch.js: безопасные поля iPhone, варианты на выбор) */
+  body.touch-ui.in-play #touch { display: block; }
+  body.touch-ui.pause-only #touch { display: block; }
+  body.touch-ui.pause-only:not(.in-play) #touch > :not(#b-pause) { display: none; }          /* там, где полных кнопок нет, остаётся одна «II» */
+  #touch .disc { box-sizing: border-box; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,246,228,0.30); border: max(2px, calc(var(--b) * 0.04)) solid rgba(58,36,49,0.55);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.16);
+    transition: transform 0.05s ease-out, background-color 0.05s ease-out; }
+  #touch .tb { position: absolute; pointer-events: auto; touch-action: none; }
+  #touch .tb::before { content: ''; position: absolute; top: calc(var(--slop, 0px) * -1); left: calc(var(--slop, 0px) * -1); right: calc(var(--slop, 0px) * -1); bottom: calc(var(--slop, 0px) * -1); border-radius: 50%; }          /* невидимая зона нажатия шире кружка: стыкуется с соседями в щелях (без «мёртвых» мест и наложений) */
+  #touch .ico { display: block; width: 60%; height: 60%; overflow: visible; pointer-events: none; opacity: 0.94; filter: drop-shadow(0 0 1.5px rgba(255,246,228,0.95)) drop-shadow(0 0 2px rgba(255,246,228,0.7)); }          /* светлая кайма: тёмный значок читается и на тёмной сцене сквозь прозрачный круг */
+  #touch .disc.on, #dpad.l .dp:first-child, #dpad.r .dp:last-child { background: rgba(255,217,138,0.82); transform: scale(0.94); }
+  /* «влево» и «вправо» рядом (палец можно вести от одной к другой): общая рамка ловит палец сама */
+  #dpad { position: absolute; pointer-events: auto; touch-action: none; }
+  #dpad .dp { position: absolute; pointer-events: none; }
+  #touch #b-int { background: rgba(255,217,138,0.72); display: none; }          /* «!» появляется, когда рядом есть с чем взаимодействовать */
+  #touch #b-int.show { display: flex; animation: ale-pop 0.22s ease-out; }
+  #touch #b-int.on { background: rgba(255,185,77,0.9); }
+  @keyframes ale-pop { from { transform: scale(0.6); opacity: 0.2; } to { transform: scale(1); opacity: 1; } }
+  /* выбор раскладки кнопок вживую (`?btnpick=1`): полоска вверху по центру, выбранная — золотая */
+  #btnpick { position: fixed; top: 3px; left: 50%; transform: translateX(-50%); z-index: 40; display: flex; gap: 3px; padding: 3px; border-radius: 999px; background: rgba(20,12,16,0.66); border: 1px solid rgba(255,233,196,0.4); touch-action: none; }
+  #btnpick button { min-width: 34px; height: 28px; padding: 0 10px; border-radius: 999px; border: 0; background: rgba(255,246,228,0.16); color: #fff6e4; font: 700 13px system-ui, sans-serif; touch-action: none; }
+  #btnpick button.on { background: #ffd98a; color: #3a2431; }
+  /* страница приближена (Touch.syncZoom, 15.10.2026): блокировки жестов сняты, чтобы игрок мог вернуть масштаб щипком или двойным касанием; сверху подсказка, не растущая вместе со страницей */
+  html.zoomed, html.zoomed body { touch-action: manipulation; }
+  #zoomhint { position: fixed; z-index: 300; display: none; align-items: center; gap: 10px; box-sizing: border-box; padding: 8px 12px; transform-origin: 0 0; background: rgba(32,20,40,0.94); color: #fff6e4;
+    font: 600 15px/1.25 -apple-system, system-ui, 'Segoe UI', sans-serif; border-bottom: 2px solid #ffd98a; touch-action: manipulation; }
+  #zoomhint span { flex: 1 1 auto; }
+  #zoomhint button { flex: 0 0 auto; min-height: 40px; padding: 0 14px; border: 0; border-radius: 12px; background: #ffd98a; color: #3a2431; font: 800 15px/1 -apple-system, system-ui, sans-serif; }
+  /* гайд по установке на экран «Домой» (src/install.js; владелец 15.10.2026): пять слайдов с картинками телефона, показывается в обычной вкладке iPhone вместо игры */
+  #install { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 100; display: none; color: #fff6e4; background: radial-gradient(130% 80% at 50% -10%, #3b2549 0%, #1d1227 50%, #0e0913 100%);
+    font: 500 16px/1.35 -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif; touch-action: manipulation; -webkit-text-size-adjust: 100%; }
+  #install.on { display: block; }
+  #install .in-wrap { position: absolute; top: 0; left: 0; right: 0; bottom: 0; margin: 0 auto; max-width: 560px; display: flex; flex-direction: column; box-sizing: border-box;
+    padding: max(10px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+  #install .in-head { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+  #install .in-head img { width: 30px; height: 30px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+  #install .in-head b { font-size: 17px; font-weight: 800; letter-spacing: 0.2px; }
+  #install .in-step { margin-left: auto; font-size: 13px; font-weight: 700; color: #ffd98a; background: rgba(255,217,138,0.12); border-radius: 999px; padding: 4px 10px; }
+  #install .in-step:empty { display: none; }
+  #install .in-viewport { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; margin: 6px -4px 0; }
+  #install .in-track { display: flex; height: 100%; transition: transform 0.34s cubic-bezier(0.2, 0.8, 0.2, 1); will-change: transform; }
+  #install .in-slide { flex: 0 0 100%; min-width: 0; height: 100%; display: flex; flex-direction: column; padding: 0 4px; box-sizing: border-box; }
+  #install .in-art { flex: 1 1 0; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 4px 0; }
+  #install .in-art svg { height: 100%; max-height: 100%; width: auto; max-width: 100%; filter: drop-shadow(0 8px 18px rgba(0,0,0,0.45)); }
+  #install .in-copy { flex: 0 0 auto; text-align: center; padding: 6px 4px 2px; }
+  #install .in-copy h2 { margin: 0 0 6px; font-size: clamp(21px, 6vw, 28px); line-height: 1.12; font-weight: 800; color: #ffe9c4; }
+  #install .in-copy p { margin: 0 auto; font-size: clamp(15px, 4.3vw, 18px); line-height: 1.38; color: #eadfcd; max-width: 30em; }
+  #install .in-dots { display: flex; justify-content: center; gap: 7px; padding: 10px 0 8px; flex: 0 0 auto; }
+  #install .in-dots i { width: 8px; height: 8px; border-radius: 4px; background: rgba(255,246,228,0.28); transition: width 0.2s, background 0.2s; }
+  #install .in-dots i.on { width: 24px; background: #ffd98a; }
+  #install .in-nav { display: flex; gap: 10px; flex: 0 0 auto; }
+  #install .in-btn { flex: 1 1 0; min-height: 54px; border: 0; border-radius: 17px; font: 800 18px/1 -apple-system, system-ui, sans-serif; color: #3a2431; background: linear-gradient(#ffdc92, #ffb84d);
+    box-shadow: 0 4px 0 #b9741b, 0 8px 18px rgba(0,0,0,0.35); touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  #install .in-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #b9741b; }
+  #install .in-back { flex: 0 0 32%; background: rgba(255,246,228,0.14); color: #fff6e4; box-shadow: none; }
+  #install.in-first .in-back { display: none; }                                         /* на первом слайде «Назад» некуда: «Дальше» во всю ширину */
+  #install .in-copyb { margin-top: 12px; width: 100%; max-width: 360px; }
+  #install .in-welcome { justify-content: center; gap: 12px; }                         /* приветствие: картинка и текст одной группой по центру, а не разнесены по краям */
+  #install .in-welcome .in-art { flex: 0 1 auto; }
+  #install .in-welcome .in-art svg { width: 100%; height: auto; }
+  #install .in-foot { flex: 0 0 auto; text-align: center; padding-top: 6px; }
+  /* карточка «играть в браузере?»: поверх всего гайда, посередине; кнопки друг под другом (в низкой горизонтальной странице — рядом) */
+  #install .in-ask { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 3; display: flex; align-items: center; justify-content: center; padding: 18px; box-sizing: border-box; background: rgba(8,5,12,0.72); }
+  #install .in-ask[hidden] { display: none; }
+  #install .in-card { width: 100%; max-width: 420px; box-sizing: border-box; padding: 18px 18px 16px; border-radius: 22px; background: #2a1c33; border: 1px solid rgba(255,233,196,0.28); box-shadow: 0 14px 40px rgba(0,0,0,0.5); text-align: center; }
+  #install .in-card p { margin: 0 0 14px; font-size: 16px; line-height: 1.4; color: #f3e6cf; }
+  #install .in-card-btns { display: flex; flex-direction: column; gap: 10px; }
+  #install .in-stay { flex: 0 0 auto; background: linear-gradient(#ffdc92, #ffb84d); }
+  #install .in-go { flex: 0 0 auto; background: rgba(255,246,228,0.14); color: #fff6e4; box-shadow: none; }
+  #install .in-skip { min-height: 44px; padding: 0 12px; background: none; border: 0; color: #b4a692; font: 600 14px/1.2 -apple-system, system-ui, sans-serif; text-decoration: underline; text-underline-offset: 3px; }
+  #install .in-pulse { transform-box: fill-box; transform-origin: center; animation: in-pulse 1.7s ease-out infinite; }
+  @keyframes in-pulse { 0% { transform: scale(0.82); opacity: 0.95; } 65% { transform: scale(1.35); opacity: 0; } 100% { transform: scale(1.35); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { #install .in-pulse { animation: none; opacity: 0.9; } #install .in-track { transition: none; } }
+  /* телефон лежит горизонтально: картинка слева, текст справа; всё компактнее, чтобы в низкой странице (Safari с полосой вкладок: ≈ 290 px) текст не обрезался */
+  @media (orientation: landscape) and (max-height: 600px) {
+    #install .in-wrap { max-width: 960px; padding-top: max(6px, env(safe-area-inset-top)); padding-bottom: max(6px, env(safe-area-inset-bottom)); }
+    #install .in-head img { width: 22px; height: 22px; border-radius: 6px; }
+    #install .in-head b { font-size: 15px; }
+    #install .in-step { font-size: 12px; padding: 2px 9px; }
+    #install .in-viewport { margin-top: 2px; }
+    #install .in-slide { flex-direction: row; align-items: center; gap: 18px; }
+    #install .in-art, #install .in-welcome .in-art { flex: 0 0 42%; height: 100%; padding: 0; }
+    #install .in-welcome .in-art svg { width: auto; height: 100%; }
+    #install .in-welcome { gap: 18px; }
+    #install .in-copy { flex: 1 1 auto; text-align: left; padding: 0 6px; max-height: 100%; overflow-y: auto; }
+    #install .in-copy p { margin: 0; max-width: none; font-size: clamp(13px, 2.4vw, 16px); line-height: 1.32; }
+    #install .in-copy h2 { font-size: clamp(18px, 3.2vw, 24px); margin-bottom: 4px; }
+    #install .in-copyb { margin-top: 8px; }
+    #install .in-btn { min-height: 40px; font-size: 16px; border-radius: 14px; }
+    #install .in-dots { padding: 4px 0; }
+    #install .in-foot { padding-top: 2px; }
+    #install .in-skip { min-height: 32px; font-size: 13px; }
+    #install .in-ask { padding: 8px 18px; }
+    #install .in-card { max-width: 560px; padding: 12px 16px 12px; }
+    #install .in-card p { margin-bottom: 10px; font-size: 14px; }
+    #install .in-card-btns { flex-direction: row; }
+    #install .in-card-btns .in-btn { flex: 1 1 0; }
+  }
+  /* подсказка про экран «Домой» (только iPhone в Safari, титульное меню) */
+  #a2hs { position: fixed; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 19; display: none; align-items: flex-end; justify-content: center; }
+  body.touch-ui.a2hs-show #a2hs { display: flex; }
+  #a2hs span { display: inline-flex; align-items: center; gap: 0.45em; margin-bottom: 6px; padding: 0.3em 0.9em; border-radius: 999px; background: rgba(43,26,32,0.7); color: #fff6e4;
+    font: 600 clamp(11px, 3.6vmin, 15px) system-ui, sans-serif; border: 1px solid rgba(255,233,196,0.45); }
+  #a2hs .ico { width: 1.5em; height: 1.5em; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="rotate"><div>Поверни телефон горизонтально, так играть удобнее</div><small>Экран не поворачивается? Выключи в Пункте управления «Блокировку книжной ориентации» (значок с замком).</small></div>
+<div id="touch">
+  <div id="dpad"><span class="disc dp" data-icon="left"></span><span class="disc dp" data-icon="right"></span></div>
+  <div class="tb disc" id="b-down" data-act="down" data-icon="down" aria-label="Присесть"></div>
+  <div class="tb disc" id="b-jump" data-act="jump" data-icon="jump" aria-label="Прыжок"></div>
+  <div class="tb disc" id="b-stomp" data-act="attack" data-icon="stomp" aria-label="Туп лапой"></div>
+  <div class="tb disc" id="b-throw" data-act="throw" data-icon="throw" aria-label="Помидор"></div>
+  <div class="tb disc" id="b-int" data-act="interact" data-icon="interact" aria-label="Действие"></div>
+  <div class="tb disc" id="b-pause" data-act="pause" data-icon="pause" aria-label="Пауза"></div>
+</div>
+<div id="a2hs"><span id="a2hs-t"></span></div>
+<script src="src/boot_guard.js"></script>
+<script src="assets/manifest.js"></script>
+<script src="src/util.js"></script>
+<script src="src/assets.js"></script>
+<script src="src/input.js"></script>
+<script src="src/world.js"></script>
+<script src="src/camera.js"></script>
+<script src="src/fx.js"></script>
+<script src="src/entity.js"></script>
+<script src="src/script.js"></script>
+<script src="src/scene.js"></script>
+<script src="src/text.js"></script>
+<script src="src/icons.js"></script>
+<script src="assets/audio/tracks.js"></script>
+<script src="assets/audio/sfx/sfx.js"></script>
+<script src="src/audio.js"></script>
+<script src="src/hint_layout.js"></script>
+<script src="src/ui.js"></script>
+<script src="src/cards.js"></script>
+<script src="src/chess.js"></script>
+<script src="src/casino.js"></script>
+<script src="src/roulette.js"></script>
+<script src="src/credits.js"></script>
+<script src="src/photo.js"></script>
+<script src="src/river.js"></script>
+<script src="src/river_stage.js"></script>
+<script src="src/quality.js"></script>
+<script src="src/game.js"></script>
+<script src="src/player.js"></script>
+<script src="src/projectile.js"></script>
+<script src="src/rat.js"></script>
+<script src="src/cockroach.js"></script>
+<script src="src/stain.js"></script>
+<script src="src/teacher.js"></script>
+<script src="src/npc.js"></script>
+<script src="src/people.js"></script>
+<script src="src/spot.js"></script>
+<script src="src/whale.js"></script>
+<script src="src/props.js"></script>
+<script src="src/danechka.js"></script>
+<script src="src/kit.js"></script>
+<script src="src/dimasik.js"></script>
+<script src="src/mount.js"></script>
+<script src="src/horse.js"></script>
+<script src="src/art.js"></script>
+<script src="src/river_art.js"></script>
+<script src="src/items.js"></script>
+<script src="src/scenes/lab.js"></script>
+<script src="src/scenes/paris_kit.js"></script>
+<script src="src/scenes/paris_landmarks.js"></script>
+<script src="src/scenes/post_art.js"></script>
+<script src="src/scenes/post_office.js"></script>
+<script src="src/story/post_story.js"></script>
+<script src="src/scenes/street_art.js"></script>
+<script src="src/scenes/street.js"></script>
+<script src="src/story/street_story.js"></script>
+<script src="src/scenes/assas_art.js"></script>
+<script src="src/scenes/assas.js"></script>
+<script src="src/story/assas_story.js"></script>
+<script src="src/scenes/yard_art.js"></script>
+<script src="src/scenes/yard.js"></script>
+<script src="src/story/yard_story.js"></script>
+<script src="src/scenes/tunnel_art.js"></script>
+<script src="src/scenes/airport_art.js"></script>
+<script src="src/scenes/airport.js"></script>
+<script src="src/scenes/takeoff.js"></script>
+<script src="src/story/airport_story.js"></script>
+<script src="src/scenes/ride_art.js"></script>
+<script src="src/scenes/ride_hazards.js"></script>
+<script src="src/scenes/ride.js"></script>
+<script src="src/story/ride_story.js"></script>
+<script src="src/scenes/tunnel.js"></script>
+<script src="src/story/tunnel_story.js"></script>
+<script src="src/parcel.js"></script>
+<script src="src/story/kit.js"></script>
+<script src="src/scenes/car_art.js"></script>
+<script src="src/scenes/kyiv_art.js"></script>
+<script src="src/scenes/kyiv_art_underpass.js"></script>
+<script src="src/scenes/kyiv_art_park.js"></script>
+<script src="src/scenes/kyiv_approach.js"></script>
+<script src="src/scenes/kyiv_park.js"></script>
+<script src="src/scenes/kyiv_court.js"></script>
+<script src="src/story/kyiv_story.js"></script>
+<script src="src/scenes/monaco_art.js"></script>
+<script src="src/scenes/monaco_art_street.js"></script>
+<script src="src/scenes/monaco_art_casino.js"></script>
+<script src="src/scenes/monaco_art_coast.js"></script>
+<script src="src/scenes/monaco_art_room.js"></script>
+<script src="src/scenes/monaco_street.js"></script>
+<script src="src/scenes/monaco_casino.js"></script>
+<script src="src/scenes/coast.js"></script>
+<script src="src/scenes/birthday_room.js"></script>
+<script src="src/story/monaco_story.js"></script>
+<script src="src/scenes/transit.js"></script>
+<script src="src/title.js"></script>
+<script src="src/touch.js"></script>
+<script src="src/install.js"></script>
+<script src="src/main.js"></script>
+</body>
+</html>
