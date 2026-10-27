@@ -138,9 +138,9 @@
       sc.onExit = () => { G.checkpoint('kyivCourt', 'start'); G.goto('kyivCourt', 'start'); };
 
       // после встречи Илюшкинс идёт рядом; до смс выход закрыт (смс приходит по дороге, правее фонтана и кресел), после — открыт
+      // Илюшкинс идёт рядом, то есть всё время в упор к героине, поэтому по E он больше не отвечает: знак «!» висел над ним весь парк, а нажатие давало одну и ту же реплику (владелец 27.10.2026)
       const afterMeet = () => {
-        ily.mode = 'follow'; ily.noTalk = false;
-        ily.onTalk = () => sc.runScript(function* () { sc.locked = true; face(p, ily); yield UI.say(K.ilyaWalk); sc.locked = false; });
+        ily.mode = 'follow'; ily.noTalk = false; ily.onTalk = null;
         UI.setObjective(T.obj.kyivPark);
         if (F.seaside_invitation) { sc.exitDoor.locked = false; sc.exitDoor.arrow = true; }
       };
@@ -363,8 +363,9 @@
         if (id !== old) G.checkpoint('kyivCourt', 'prepare', { heal: false });
         sc.locked = false;
       }
+      // у стойки до боя по E — смена набора и пополнение; после победы он идёт рядом и по E не отвечает (noTalk в win() и при загрузке с победой): знак «!» висел над ним до самого такси, а нажатие
+      // повторяло одну реплику (владелец 27.10.2026)
       ily.onTalk = () => {
-        if (F.dimasik_defeated) return sc.runScript(function* () { sc.locked = true; UI.clearHints(); face(p, ily); yield UI.say(K.ilyaAgain); sc.locked = false; });
         if (!attempt) return sc.runScript(changeKit);
         supply();
       };
@@ -426,7 +427,7 @@
         yield UI.say(K.afterFight);
         if (kit) { kit.dead = true; sc.kit = null; kit = null; }
         UI.setObjective(T.obj.kyivTaxi); UI.hint('bubel', K.carHint, 5);
-        ily.mode = 'follow'; bubel.mode = 'follow'; sc.cameraTarget = null; sc.locked = false;          // Бубел стояла на посту у стойки с оружием — теперь снова идёт за героиней
+        ily.mode = 'follow'; ily.noTalk = true; bubel.mode = 'follow'; sc.cameraTarget = null; sc.locked = false;          // Бубел стояла на посту у стойки с оружием — теперь снова идёт за героиней
         if (Ale.Touch) Ale.Touch.setThrowIcon(null);
       }
 
@@ -434,7 +435,7 @@
       if (entry === 'won') F.dimasik_defeated = true;                      // ссылка ?entry=won без flags= тоже должна вести к проводам
       if (entry === 'won' || F.dimasik_defeated) {                         // победа уже была: Димасика нет, опасностей нет
         dim.dead = true; dim.hidden = true; sc.net.disabled = true; sc.cameraTarget = null;
-        p.x = X.supply - 20; bubel.x = p.x - 80; bubel.mode = 'follow'; ily.x = X.supply + 70; ily.mode = 'follow';
+        p.x = X.supply - 20; bubel.x = p.x - 80; bubel.mode = 'follow'; ily.x = X.supply + 70; ily.mode = 'follow'; ily.noTalk = true;
         G.checkpoint('kyivCourt', 'won', { heal: false });
         UI.setObjective(T.obj.kyivTaxi);
         return;

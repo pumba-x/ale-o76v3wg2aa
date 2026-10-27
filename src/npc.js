@@ -183,8 +183,9 @@
       super(Object.assign({ w: 60, h: 120, z: 26, id: 'clerk' }, o));
       this.counterTop = o.counterTop;
       this.bust = o.bust || 'clerk_bust';               // картинка бюста: служащий почты или дежурная в аэропорту (att_bust)
+      this.hide = o.hide === undefined ? 16 : o.hide;   // сколько низа бюста спрятано за стойкой (юн.): у бюста поменьше — меньше, иначе подбородок уходит под стойку
       const sz = Ale.spriteSize(this.bust);
-      this.headH = this.y - (this.counterTop + 16 - (sz ? sz.h : 66));   // макушка бюста над стойкой
+      this.headH = this.y - (this.counterTop + this.hide - (sz ? sz.h : 66));   // макушка бюста над стойкой
       this.promptY = this.headH + 12;
       this.interactable = true; this.interactRange = 150;
       this.onTalk = o.onTalk;
@@ -201,7 +202,7 @@
     draw(ctx, alpha) {
       const talk = Ale.isSpeaking(this.id);
       const bob = Math.sin(this.t * 2.2) * 1.2 + (talk ? Math.abs(Math.sin(this.t * 13)) * -3 : 0) + (this.nod > 0 ? Math.sin(this.nod * 20) * 3 : 0);
-      Ale.drawSprite(ctx, this.bust, this.x, this.counterTop + 16 + bob, { flip: this.facing < 0 });
+      Ale.drawSprite(ctx, this.bust, this.x, this.counterTop + this.hide + bob, { flip: this.facing < 0 });
     }
   }
 

@@ -239,7 +239,7 @@ sprites:{
 "ck_walk4":{f:"sprites/ck_walk4.png",w:125,h:65,ax:62.80,ay:63.19,hs:30.60},
 "ck_walk5":{f:"sprites/ck_walk5.png",w:125,h:65,ax:62.80,ay:63.19,hs:30.60},
 "ck_walk6":{f:"sprites/ck_walk6.png",w:125,h:67,ax:62.80,ay:65.19,hs:31.50},
-"clerk_bust":{f:"sprites/clerk_bust.png",w:161,h:158,ax:80.50,ay:158.00,hs:78.72},
+"clerk_bust":{f:"sprites/clerk_bust.png",w:112,h:110,ax:56.00,ay:110.00,hs:55.10},
 "cloud_a":{f:"sprites/cloud_a.png",w:896,h:276,ax:448.00,ay:138.00,hs:134.50},
 "cloud_b":{f:"sprites/cloud_b.png",w:426,h:456,ax:213.00,ay:228.00,hs:225.00},
 "cloud_c":{f:"sprites/cloud_c.png",w:426,h:181,ax:213.00,ay:90.50,hs:87.50},

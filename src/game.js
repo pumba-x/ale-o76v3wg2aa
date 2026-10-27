@@ -43,6 +43,8 @@
     // Разрешение кадра: потолок числа пикселей и автоподбор (см. resize, _tuneResolution и src/quality.js). На слабых видеокартах и огромных окнах главный расход — заливка.
     // stats — экран диагностики (?stats=1 или F2): числа, которые владелец может снять скриншотом на телефоне (раздел «Экран диагностики» ниже).
     resScale: 1, maxPixels: 3.2e6, maxPixelsTouch: 3.9e6, quality: null, stats: false, realFades: false,
+    // Слой холста в странице (refreshLayer): сколько раз пересоздавался; layerFix выключает пересоздание (страницы проверок с ручным временем и ссылка с ?layerfix=0)
+    layerFix: true, layerN: 0,
     // Безопасные поля кадра (юниты вида): вырез и скругления iPhone по бокам, домашняя полоса снизу; игра идёт на весь экран (viewport-fit=cover), а интерфейс стоит внутри этих полей.
     // Считает Touch.layout из resize; у обычного окна всё нули.
     safe: { l: 0, r: 0, t: 0, b: 0 },
@@ -62,6 +64,7 @@
       this.ctx = this.canvas.getContext('2d', { alpha: false });
       const q = new URLSearchParams(location.search);
       this.manual = q.has('manual');
+      this.layerFix = !this.manual && q.get('layerfix') !== '0';          // ?layerfix=0 — прежнее поведение (для сравнения «до и после» на телефоне)
       this.params = q;
       this.stats = this.statsAtStart(q);
       this.quality = Ale.Quality ? Ale.Quality.create() : null;
@@ -172,8 +175,10 @@
       const maxPx = this.pixelCap();
       if (cssW * cssH * dpr * dpr > maxPx) dpr = Math.sqrt(maxPx / (cssW * cssH));      // не больше ~3 Мпикс: браузер сам растянет холст до окна
       const cw = Math.round(cssW * dpr), ch = Math.round(cssH * dpr);
-      if (this.canvas.width !== cw || this.canvas.height !== ch) { this.canvas.width = cw; this.canvas.height = ch; }
+      const resized = this.canvas.width !== cw || this.canvas.height !== ch;
+      if (resized) { this.canvas.width = cw; this.canvas.height = ch; }
       this.canvas.style.width = cssW + 'px'; this.canvas.style.height = cssH + 'px';
+      if (resized && this.layerFix) this.refreshLayer();
       this.cw = cw; this.ch = ch; this.dpr = dpr; this.cssW = cssW; this.cssH = cssH;
       this.viewH = 720;
       this.viewW = Math.round(Ale.clamp(720 * (cssW / cssH), 1000, 1700));
@@ -187,6 +192,22 @@
       this.portrait = cssH > cssW * 1.1 && !!(Ale.Touch && Ale.Touch.active);
       document.body.classList.toggle('portrait', this.portrait);
       if (this.manual && this.mode !== 'loading') this.render();
+    },
+
+    // Слой холста пересоздаётся: холст вынимается из страницы и ставится на то же место (владелец 27.10.2026, iPhone 16e, значок «Домой»: «качество по-прежнему низкое»).
+    // Причина найдена в симуляторе iOS 27 и подтверждена по скриншоту владельца (резкость текста на холсте и экранных кнопок разошлась втрое): холст стоит в разметке с размером по умолчанию 300×150
+    // (отношение буфера к CSS-размеру 1), а пока грузятся ≈ 80 скриптов подряд, браузер успевает один раз показать страницу — слой холста создаётся в 1×. Когда игра потом ставит настоящий размер
+    // (2622×1206 при 874×402 CSS-пикселей), слой остаётся в 1×: экран получает кадр через разрешение CSS-пикселей и растягивает втрое (буфер резкий — toDataURL даёт кромки в 1 пиксель, на экране
+    // они размыты на ≈ 2 пикселя, как «уменьшили втрое и растянули билинейно»). Не помогают ни width = width, ни will-change, ни translateZ, ни display none / block; помогает только пересоздать слой —
+    // вынуть холст и вставить обратно (после этого экран совпадает с буфером до пикселя). Делается на каждое изменение размера буфера (запуск, поворот, шаг автоподбора, ловушка заставки): дёшево,
+    // и ни один из случаев не остаётся с устаревшим слоем. Контекст, обработчики и состояние холста не теряются. Проверка — tests/suite_layer.js.
+    refreshLayer() {
+      const c = this.canvas, p = c && c.parentNode;
+      if (!p) return false;
+      const next = c.nextSibling;
+      p.removeChild(c); p.insertBefore(c, next);
+      this.layerN++;
+      return true;
     },
 
     // Вид сцены: размер и безопасные поля кадра для камеры
@@ -334,7 +355,7 @@
         'dt p50 ' + pick(0.5) + '  p95 ' + pick(0.95) + '  max ' + pick(1) + '   >50:' + (r ? r.c50 : 0) + ' >100:' + (r ? r.c100 : 0) + ' >250:' + (r ? r.c250 : 0) + (sc ? '  scene ' + sc.c50 + '/' + sc.c100 + '/' + sc.c250 : ''),
         (() => { const ti = r && r.scenes['title:intro']; return ti && ti.n ? 'intro ' + ti.n + ' fr  avg ' + (ti.sum / ti.n * 1000).toFixed(1) + 'ms (' + (ti.n / ti.sum).toFixed(0) + ' fps)  >50:' + ti.c50 + ' >100:' + ti.c100 + ' >250:' + ti.c250 + '  cv ' + (this._introCv || '-') : null; })(),          // ловушка заставки: сколько кадров, средний fps и подвисания — видно и после неё; cv — размер холста в ловушке
         ...(A && A.statsLines ? A.statsLines() : ['audio ' + (ctx ? ctx.state : 'none')]),          // состояние звука, сеанс, тихий канал iOS, часы и сигнал на мастер-шине, последние события (src/audio.js, «разблокировка и самопроверка»)
-        'layers ' + pool.layers + '/' + pool.megapixels + 'Mpx d≥' + (pool.minD || '-') + ' need ' + (this.nativeK ? this.nativeK().toFixed(2) : '-') + '  touch ' + (Ale.Touch && Ale.Touch.active ? 1 : 0) + '  standalone ' + (standalone ? 1 : 0) + '  zoom ' + (window.visualViewport ? window.visualViewport.scale.toFixed(2) : '-') + '  secure ' + (window.isSecureContext ? 1 : 0),
+        'layers ' + pool.layers + '/' + pool.megapixels + 'Mpx d≥' + (pool.minD || '-') + ' need ' + (this.nativeK ? this.nativeK().toFixed(2) : '-') + '  lay ' + this.layerN + '  touch ' + (Ale.Touch && Ale.Touch.active ? 1 : 0) + '  standalone ' + (standalone ? 1 : 0) + '  zoom ' + (window.visualViewport ? window.visualViewport.scale.toFixed(2) : '-') + '  secure ' + (window.isSecureContext ? 1 : 0),
         (() => { const pr = Ale.Touch && Ale.Touch.press || { ts: 0, blocked: 0, sel: 0, ctx: 0, drag: 0 }; return 'press ' + pr.ts + '/' + pr.blocked + '  sel ' + pr.sel + ' ctx ' + pr.ctx + ' drag ' + pr.drag; })(),          // касаний / из них отменено; попытки Safari выделить, показать меню, поднять предмет (долгое нажатие)
         'ins ' + insets.map((v) => Math.round(v)).join('/') + 'pt  safe ' + safe.map((v) => Math.round(v)).join('/') + 'u  btn ' + (Ale.Touch ? Ale.Touch.variant : '-'),          // безопасные поля окна (слева/справа/сверху/снизу): что сообщает система и что осталось кадру игры
       ];

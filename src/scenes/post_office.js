@@ -4,7 +4,10 @@
   'use strict';
   const Ale = (window.Ale = window.Ale || {});
   const A = Ale.Art, PA = Ale.PostArt, P = PA.P, OUT = A.OUT;
-  const FY = 600, WALL = 584, WIDTH = 3000;   // FY — «дорожка» героев, WALL — где мебель у стены касается пола
+  // ART_W — ширина комнаты для камеры и рисунка, WIDTH — где кончается игровая зона (правая стена). Служебный выход стоит у самого правого края (рама кончается в 4 юн. от него), а на экране с вырезом
+  // полоса за краем мира дозаполняется зеркальным продолжением слоя (Art.blitView): без запаса справа рядом вставала вторая, отзеркаленная дверь с перевёрнутой вывеской (владелец 27.10.2026). Запас больше
+  // самой широкой полосы (≈ 114 юн. у iPhone на весь экран): за дверью зеркалится только голая стена с плинтусом и полом.
+  const FY = 600, WALL = 584, WIDTH = 3000, ART_W = WIDTH + 140;   // FY — «дорожка» героев, WALL — где мебель у стены касается пола
 
   const X = {
     door: 190, bench: 400, window1: 640, bags: 900, poster: 1000, poster2: 1130, clock: 1235,
@@ -80,9 +83,9 @@
 
   // ---------------------------------------------------------------- сцена
   Ale.Scenes.postOffice = function (game, entry) {
-    const sc = new Ale.Scene(game, { id: 'postOffice', width: WIDTH, music: 'paris', place: entry === 'start' ? Ale.T.place.post : null });
+    const sc = new Ale.Scene(game, { id: 'postOffice', width: ART_W, music: 'paris', place: entry === 'start' ? Ale.T.place.post : null });
     const W = sc.world;
-    const room = A.layer(WIDTH, 720, (g, w, h) => PA.drawRoom(g, w, h, X), 1.5);
+    const room = A.layer(ART_W, 720, (g, w, h) => PA.drawRoom(g, w, h, X), 1.5);
 
     // ---- геометрия
     W.addSolid(-400, FY, 400 + X.hatch - 66, 400, { kind: 'floor' });                // до люка (люк — отдельный блок)
@@ -120,7 +123,9 @@
     sc.add(new Ale.Decor({ x: X.clerk, y: WALL, z: 32, draw: (ctx) => drawWindow(ctx, X.clerk, WALL - 100 - 112 + 4) }));
 
     // ---- персонажи и предметы
-    const clerk = sc.add(new Ale.Clerk({ x: X.clerk, y: FY, counterTop: WALL - 100, facing: -1 }));
+    // бюст служащего 79 → 55 юн. (tools/sprites.json, набор clerk: владелец 27.10.2026 — «голова очень большая, сделать на 30% меньше»); за стойкой спрятано 5 юн. вместо 16: макушка на ≈ 10 юн. ниже
+    // прежней, а голова, шея и галстук видны над подоконником, как и раньше (при 11 подбородок уходил под подоконник и он казался присевшим)
+    const clerk = sc.add(new Ale.Clerk({ x: X.clerk, y: FY, counterTop: WALL - 100, facing: -1, hide: 5 }));
     const basket = sc.add(new Ale.TomatoBox({ x: X.crate, y: WALL - 100, z: 31, onTake: () => { Ale.Game.set('tomatoes_taken'); sc.onBasket && sc.onBasket(); } }));
     const door = sc.add(new Ale.Door({ x: X.door, y: FY, id: 'door', range: 56, onUse: () => sc.onDoor && sc.onDoor() }));
     const hatch = sc.add(new Ale.Hatch({ x: X.hatch, y: FY, onCrack: () => sc.onCrack && sc.onCrack(), onOpen: () => sc.onHatchOpen && sc.onHatchOpen() }));

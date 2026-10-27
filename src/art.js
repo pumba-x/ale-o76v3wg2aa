@@ -50,11 +50,25 @@
   function poolSize() { let px = 0, minD = 0; for (const c of pool) { px += c.width * c.height; if (c.__d && (!minD || c.__d < minD)) minD = c.__d; } return { layers: pool.length, megapixels: +(px / 1e6).toFixed(1), minD: +minD.toFixed(2) }; }
   function blit(ctx, l, x, y) { ctx.drawImage(l.c, x, y, l.w, l.h); }
   // Рисует слой так, чтобы его левый край был в экранной точке sx (вид: 0..viewW); только видимая часть.
+  // Мир кончается на краю слоя, а на экране с вырезом камера ставит край мира на границу безопасного поля (Camera.setPad): между краем слоя и краем экрана остаётся полоса шириной в поле
+  // (владелец 27.10.2026, iPhone: «слева на экране просто полоска обрезанная» — там была плоская заливка, а комнату и растение на самом краю обрезало). Полоса дозаполняется зеркальным
+  // продолжением слоя: пол, стена, плинтус и узор идут дальше без шва, а то, что стояло на самом краю (растение, колонна), даёт симметричную пару. Слой шире полосы — иначе остаток не закрывается.
   function blitView(ctx, l, sx, sy, viewW) {
     const s = l.c.width / l.w;
     const x0 = Math.max(0, -sx), x1 = Math.min(l.w, viewW - sx);
-    if (x1 <= x0) return;
-    ctx.drawImage(l.c, x0 * s, 0, (x1 - x0) * s, l.c.height, sx + x0, sy, x1 - x0, l.h);
+    if (x1 > x0) ctx.drawImage(l.c, x0 * s, 0, (x1 - x0) * s, l.c.height, sx + x0, sy, x1 - x0, l.h);
+    if (sx > 0) mirrorEdge(ctx, l, s, sx, sy, Math.min(sx, l.w), -1);
+    const rx = sx + l.w;
+    if (rx < viewW) mirrorEdge(ctx, l, s, rx, sy, Math.min(viewW - rx, l.w), 1);
+  }
+  // Зеркальная копия края слоя шириной w юнитов по ту сторону границы edge (dir −1 — слева от неё, 1 — справа)
+  function mirrorEdge(ctx, l, s, edge, sy, w, dir) {
+    if (!(w > 0.01)) return;
+    ctx.save();
+    ctx.translate(edge, 0); ctx.scale(-1, 1);
+    if (dir < 0) ctx.drawImage(l.c, 0, 0, w * s, l.c.height, 0, sy, w, l.h);
+    else ctx.drawImage(l.c, (l.w - w) * s, 0, w * s, l.c.height, -w, sy, w, l.h);
+    ctx.restore();
   }
 
   function rrPath(ctx, x, y, w, h, r) {
