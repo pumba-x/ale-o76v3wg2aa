@@ -72,15 +72,11 @@
       if (this.ctx) return;
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return;
-      // iOS 16.4+: звук должен играть и при включённом беззвучном режиме — как у обычной игры
-      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* не везде */ }
-      let ctx; try { ctx = new AC(); } catch (e) { return; }
-      this.ctx = ctx;
-      this._build(ctx);
-      // тихий прогон: между master и динамиками стоит узел с нулевым усилением (master трогают ползунки и проверки, поэтому глушим отдельным узлом; офлайн-контексты проверок сюда не попадают)
-      if (this.silent) { this.out = ctx.createGain(); this.out.gain.value = 0; this.master.disconnect(); this.master.connect(this.out); this.out.connect(ctx.destination); }
-      // iOS разрешает запуск звука только внутри жеста «отпускания» (touchend/click): повторяем попытку на них
-      for (const ev of ['touchend', 'click', 'pointerup']) window.addEventListener(ev, () => { if (this.ctx && this.ctx.state !== 'running' && !this.suspended) this.ctx.resume(); }, { passive: true });
+      this._session();
+      let ctx; try { ctx = new AC(); } catch (e) { this._j('AudioContext не создан: ' + (e && e.name || e)); return; }
+      this._adopt(ctx);
+      this._j('контекст создан: ' + ctx.state + ', ' + ctx.sampleRate + ' Гц' + (document.hidden ? ', страница скрыта' : ''));
+      this._listen();
       this.loadSfx();
       this.preload('title');
     },
@@ -89,8 +85,174 @@
     init() {
       if (!this.ctx) this.prepare();
       if (!this.ctx) return;
-      if (this.ctx.state !== 'running' && !this.suspended) this.ctx.resume();
+      this.unlock('init');
       if (this.pending) { const p = this.pending, po = this.pendingOpts; this.pending = null; this.pendingOpts = null; this.music(p, po); }
+    },
+
+    // ------------------------------------------------------------ разблокировка и самопроверка звука (27.10.2026)
+    // Владелец (iPhone 16e, игра со значка «Домой»): «звука нет совсем» — 14.10, 15.10 и 27.10; во вкладке Safari звук был. Устройства у нас нет, поэтому разблокировка сделана с запасом на все известные
+    // причины, а всё, что происходит со звуком, видно на экране диагностики (?stats=1 или пять касаний в левом верхнем углу кадра):
+    //   · жест: попытка запустить звук — на любом «отпускании» и клавише (touchend, pointerup, click, keydown, mouseup), в фазе ПЕРЕХВАТА у окна: чужой stopPropagation на кнопке её не съест;
+    //   · сеанс: navigator.audioSession.type = 'playback' (iOS 17+) — заново на каждом жесте, пока звук не пошёл; на iOS ещё и «тихий канал» (_channel): зацикленный беззвучный <audio>, запущенный
+    //     из жеста, переводит сеанс страницы в «воспроизведение» и там, где audioSession нет или не слушается (у значка «Домой»), — тогда звук не глушит переключатель «Без звука» (WebKit 237322);
+    //     пока страница скрыта или без фокуса, канал выключен и источник снят — иначе на экране блокировки висел бы плеер;
+    //   · «пауза страницы»: iOS у значка «Домой» не всегда присылает visibilitychange при возвращении (так пишут и в unmute.js) — видимая страница с жестом пауза больше не держит;
+    //   · завис или сломан контекст: iOS 26 у значка «Домой» — звук только при первом запуске, resume() не возвращается (WebKit 291892). Если после жеста контекст за 1,5 с не пошёл
+    //     или «идёт», а его часы стоят, на следующем жесте он пересоздаётся (не больше REBUILD_MAX раз за запуск); расшифрованные записи переходят в новый, играющий трек начинается заново;
+    //   · самопроверка: на мастер-шине стоит AnalyserNode (без выхода: только смотрит) — «sig» на экране диагностики показывает, идёт ли из игры сигнал. «running», часы идут, сигнал есть, а звука не слышно —
+    //     значит, его глушит телефон (переключатель «Без звука», громкость, наушники/Bluetooth), а не игра.
+    REBUILD_MAX: 3,
+    _jn: [], _clock: 0, _gest: 0, _rebuilds: 0,
+    _j(text) { this._jn.push({ t: this._clock, text }); if (this._jn.length > 16) this._jn.shift(); },
+    _ios() { const n = navigator, ua = n.userAgent || ''; return /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && (n.maxTouchPoints || 0) > 1); },
+    _session() {
+      try { const s = navigator.audioSession; if (s && s.type !== 'playback') { s.type = 'playback'; if (this._sessNoted !== s.type) { this._sessNoted = s.type; this._j('сеанс: ' + s.type); } } } catch (e) { /* не везде */ }
+    },
+    // Новый контекст: шины, тихий выход проверок, анализатор и слежение за состоянием
+    _adopt(ctx) {
+      this.ctx = ctx; this._kicked = false; this._broken = ''; this._ct = null;
+      this._build(ctx);
+      // тихий прогон: между master и динамиками стоит узел с нулевым усилением (master трогают ползунки и проверки, поэтому глушим отдельным узлом; офлайн-контексты проверок сюда не попадают)
+      if (this.silent) { this.out = ctx.createGain(); this.out.gain.value = 0; this.master.disconnect(); this.master.connect(this.out); this.out.connect(ctx.destination); }
+      try { this.tap = ctx.createAnalyser(); this.tap.fftSize = 512; this.master.connect(this.tap); this._tapBuf = new Float32Array(512); } catch (e) { this.tap = null; }
+      const onState = () => {
+        if (this.ctx !== ctx) return;
+        this._j('состояние: ' + ctx.state);
+        // прерывание кончилось (звонок, Siri, другой плеер) — iOS разрешает возобновить без касания, если звук уже запускался; не вышло — подождём жеста
+        if (ctx.state !== 'running' && ctx.state !== 'closed' && !this.suspended && !document.hidden && (this._everRan || this._gest > 0)) { try { const p = ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* ок */ } }
+        if (ctx.state === 'running') { this._everRan = true; this._resumeOk(); }
+      };
+      if (typeof ctx.startRendering === 'function') return;          // офлайн-контекст проверок: следить не за чем
+      try { ctx.addEventListener('statechange', onState); } catch (e) { ctx.onstatechange = onState; }
+    },
+    _listen() {
+      if (this._listening) return; this._listening = true;
+      const opt = { capture: true, passive: true };
+      for (const ev of ['touchend', 'pointerup', 'click', 'keydown', 'mouseup']) window.addEventListener(ev, (e) => this.unlock(ev, e), opt);
+      // вернулись (значок «Домой», переключатель приложений): часы и пауза страницы проверяются заново; без касания — только то, что iOS разрешает
+      const back = (why) => { if (document.hidden) { this._channelOff(why); return; } this._j(why); this._unstick(); if (this.ctx && this.ctx.state !== 'running' && !this.suspended && this._everRan) { try { const p = this.ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* ок */ } } };
+      document.addEventListener('visibilitychange', () => back(document.hidden ? 'страница скрыта' : 'страница видна'));
+      window.addEventListener('pageshow', () => back('pageshow'));
+      window.addEventListener('pagehide', () => this._channelOff('pagehide'));
+      window.addEventListener('focus', () => back('фокус'));
+      window.addEventListener('blur', () => this._channelOff('без фокуса'));
+    },
+    // Пауза «страница скрыта» стоит, а страница видна (событие возвращения не пришло) — снимаем
+    _unstick() {
+      if (this._pausePage && !document.hidden) { this._j('пауза страницы снята: страница видна'); this._pausePage = false; this._applySuspend(); }
+    },
+    // Жест игрока: всё, что нужно, чтобы звук пошёл (и пошёл снова после прерывания). kind — тип события; trusted — настоящее «отпускание» или клавиша (по нему судят, что resume() завис)
+    unlock(kind, e) {
+      if (!this.ctx) this.prepare();
+      if (!this.ctx || document.hidden) return;
+      this._gest++;
+      this._unstick();
+      this._session();
+      if (kind !== 'init') this._channel();
+      if ((this.ctx.state === 'closed' || this._broken) && kind !== 'init') this._rebuild(this._broken || 'контекст закрыт');
+      const c = this.ctx;
+      if (c.state !== 'running' && !this.suspended) this._resume(kind, !!e && e.isTrusted !== false && (kind === 'touchend' || kind === 'click' || kind === 'keydown'));          // сторож — только для настоящих жестов (события проверок и вызовы из кода не в счёт)
+      // старые iOS запускают вывод только после звука, начатого прямо в жесте: один беззвучный отсчёт (у каждого контекста — один раз)
+      if (!this._kicked && kind !== 'init') { this._kicked = true; try { const b = c.createBuffer(1, 1, c.sampleRate), s = c.createBufferSource(); s.buffer = b; s.connect(c.destination); s.start(0); } catch (x) { /* ок */ } }
+    },
+    _resume(kind, trusted) {
+      const c = this.ctx, was = c.state;
+      let p; try { p = c.resume(); } catch (x) { this._j('resume бросил: ' + (x && x.name || x)); return; }
+      if (this._lastResumeKind !== kind + was) { this._lastResumeKind = kind + was; this._j('resume (' + kind + ', ' + was + ')'); }
+      if (p && p.then) p.then(() => { if (this.ctx === c && c.state === 'running') this._resumeOk(); }, (x) => this._j('resume отклонён: ' + (x && x.name || x)));
+      // сторож: настоящий жест, а контекст за 1,5 с так и не пошёл — на следующем жесте пересоздаём (iOS 26 у значка «Домой»: resume() не возвращается)
+      if (trusted && !this._wd) {
+        this._wd = setTimeout(() => {
+          this._wd = 0;
+          if (this.ctx === c && c.state !== 'running' && !this.suspended && !document.hidden) { this._broken = 'resume не сработал за 1,5 с (' + c.state + ')'; this._j(this._broken); }
+        }, 1500);
+      }
+    },
+    _resumeOk() { if (!this._ranNoted) { this._ranNoted = true; this._j('звук пошёл'); } this._everRan = true; },
+    // Пересоздать контекст (только из жеста: новый тоже нужно запустить). Расшифрованные записи переносятся (AudioBuffer не привязан к контексту), играющий трек начинается заново.
+    _rebuild(why) {
+      if (this._rebuilds >= this.REBUILD_MAX) { this._broken = ''; return; }
+      const AC = window.AudioContext || window.webkitAudioContext, old = this.ctx;
+      let ctx; try { ctx = new AC(); } catch (e) { this._j('новый контекст не создан: ' + (e && e.name || e)); this._broken = ''; return; }
+      this._rebuilds++; this._j('пересоздан (' + why + ')');
+      const cur = this.current;
+      // заплыв идёт по долям этого трека (River._slewToMusic): начатый с нуля, он тянул бы часы заплыва назад на десятки секунд — продолжаем с того места, где заплыв сейчас
+      const sw = Ale.River && Ale.River.session, at = sw && !sw.done && sw.synced && sw.syncName === cur && sw.t > 0 ? sw.t : 0;
+      try { if (this.seq) clearInterval(this.seq.timer); } catch (e) { /* ок */ }
+      for (const n of Object.keys(this._loops)) { try { this._loops[n].src.stop(); } catch (e) { /* ок */ } delete this._loops[n]; }
+      this.seq = null; this.file = null; this._dipped = false;
+      try { const pc = old.close(); if (pc && pc.catch) pc.catch(() => {}); } catch (e) { /* ок */ }          // close() асинхронный: отказ (контекст уже закрыт) не должен падать в консоль необработанным
+      this._adopt(ctx);
+      this._ranNoted = false;
+      if (this.muted) this.master.gain.value = 0;
+      this.current = null;
+      if (cur) this.music(cur, at ? { at, in: 0.3 } : undefined);
+    },
+    // Тихий канал iOS (см. шапку раздела): беззвучный зацикленный <audio>; источник — сгенерированный WAV (blob:, разрешён политикой выкладки media-src). Запускается только из жеста.
+    _channel() {
+      if (this.silent || !this._ios() || document.hidden) return;
+      const ch = this._ch || (this._ch = { el: null, url: null, state: 'none' });
+      if (ch.el && !ch.el.paused) return;
+      try {
+        if (!ch.url) ch.url = URL.createObjectURL(new Blob([this._silenceWav(this.ctx ? this.ctx.sampleRate : 48000)], { type: 'audio/wav' }));
+        if (!ch.el) { const a = ch.el = document.createElement('audio'); a.setAttribute('x-webkit-airplay', 'deny'); a.setAttribute('playsinline', ''); a.preload = 'auto'; a.loop = true; a.controls = false; try { a.disableRemotePlayback = true; } catch (e) { /* ок */ } }
+        const a = ch.el;
+        a.src = ch.url;                  // источник — заново перед каждым запуском (iOS 26 у значка «Домой»: элемент после повторного открытия «застревает», WebKit 295518)
+        const p = a.play();
+        ch.state = 'play';
+        if (p && p.then) p.then(() => { if (ch.noted !== 'ok') { ch.noted = 'ok'; this._j('тихий канал играет'); } }, (x) => { ch.state = 'err'; this._j('тихий канал: ' + (x && x.name || x)); try { a.removeAttribute('src'); a.load(); } catch (y) { /* ок */ } });
+      } catch (e) { ch.state = 'err'; this._j('тихий канал: ' + (e && e.message || e)); }
+    },
+    _channelOff(why) {
+      const ch = this._ch; if (!ch || !ch.el || ch.state === 'off') return;
+      try { ch.el.pause(); ch.el.removeAttribute('src'); ch.el.load(); } catch (e) { /* ок */ }       // без источника плеер исчезает и с экрана блокировки
+      ch.state = 'off'; ch.noted = ''; this._j('тихий канал выключен: ' + why);
+    },
+    // WAV 0,25 с, 16 бит, стерео, частота контекста (iOS сводит Web Audio к частоте и формату играющего <audio>: моно 8 кГц испортило бы звук); отсчёты ±1 (−90 дБ), а не нули — «пустой» файл iOS может не играть
+    _silenceWav(rate) {
+      rate = Math.round(rate || 48000);
+      const n = Math.round(rate * 0.25), ch = 2, bytes = n * ch * 2, buf = new ArrayBuffer(44 + bytes), v = new DataView(buf);
+      const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+      str(0, 'RIFF'); v.setUint32(4, 36 + bytes, true); str(8, 'WAVE'); str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, ch, true);
+      v.setUint32(24, rate, true); v.setUint32(28, rate * ch * 2, true); v.setUint16(32, ch * 2, true); v.setUint16(34, 16, true); str(36, 'data'); v.setUint32(40, bytes, true);
+      for (let i = 0; i < n * ch; i++) v.setInt16(44 + i * 2, (i >> 1) % 2 ? 1 : -1, true);
+      return buf;
+    },
+    // Каждый кадр (Game.frame, не в проверках с ручным временем): идут ли часы звука и есть ли сигнал на мастер-шине
+    tick(dt) {
+      this._clock += dt;
+      const c = this.ctx; if (!c) return;
+      if (c.state === 'running' && !document.hidden && !this.suspended) {
+        const ct = this._ct;
+        if (!ct) this._ct = { t0: c.currentTime, w: 0 };          // отсчёт — с этого кадра: его dt уже прошёл до t0
+        else if ((ct.w += dt) >= 1.5) {
+          const adv = c.currentTime - ct.t0;
+          this._rate = adv / ct.w;
+          if (adv < 0.05 && !this._broken) { this._broken = 'часы звука стоят'; this._j(this._broken + ' (running)'); }
+          this._ct = null;
+        }
+      } else this._ct = null;
+      if (this.tap && (this._tapT = (this._tapT || 0) + dt) >= 0.25) {
+        this._tapT = 0;
+        try { this.tap.getFloatTimeDomainData(this._tapBuf); let pk = 0; for (let i = 0; i < this._tapBuf.length; i++) { const a = Math.abs(this._tapBuf[i]); if (a > pk) pk = a; } this._peak = Math.max(pk, (this._peak || 0) * 0.6); if (pk > 3e-4) { this._sigAt = this._clock; this._heard = (this._heard || 0) + 0.25; } } catch (e) { /* ок */ }
+      }
+    },
+    // Звук мог бы играть, но браузер его ещё не разрешил: нужна подсказка «Коснись экрана, чтобы включить звук» (UI). Не в проверках и не когда звук выключен ползунками
+    needsTap() {
+      const c = this.ctx;
+      if (!c || this.silent || this.muted || this.suspended || document.hidden || this._clock < 1) return false;
+      return c.state !== 'running' || !!this._broken;
+    },
+    // Строки для экрана диагностики (Game.statsLines)
+    statsLines() {
+      const c = this.ctx, ch = this._ch, db = (v) => (v > 1e-6 ? (20 * Math.log10(v)).toFixed(0) : '-inf');
+      const sess = navigator.audioSession ? navigator.audioSession.type : 'none';
+      const out = [
+        'audio ' + (c ? c.state : 'none') + '  sess ' + sess + '  ch ' + (ch ? ch.state : (this._ios() ? 'none' : 'n/a')) + '  t ' + (c ? c.currentTime.toFixed(1) : '-') + ' rate ' + (this._rate !== undefined ? this._rate.toFixed(2) : '-') +
+          '  sig ' + db(this._peak || 0) + 'dB heard ' + (this._heard || 0).toFixed(1) + 's  silent ' + (this.silent ? 1 : 0) + '  vol ' + this.vol.music + '/' + this.vol.sfx + '  music ' + (this.current || '-') + (this.file ? '' : this.current ? '(нет)' : ''),
+        'aud gest ' + this._gest + ' rebuild ' + this._rebuilds + (this._broken ? ' BROKEN' : '') + (this.suspended ? ' PAUSED' : '') + '  ' + this._jn.slice(-3).map((e) => e.t.toFixed(0) + 's ' + e.text).join(' | '),
+      ];
+      return out;
     },
 
     // Шины и шум для любого контекста (в том числе OfflineAudioContext — так проверяем синтез в тестах).
@@ -443,10 +605,11 @@
       if (rec.buf) return Promise.resolve(rec.buf);
       if (rec.p) return rec.p;
       const url = /^(data:|blob:|https?:)/.test(F.f) ? F.f : (AU.base || 'assets/audio/') + F.f;
+      let dc = null;          // контекст, которым расшифровывали: если его за это время пересоздали (_rebuild закрывает старый, и расшифровка в нём обрывается), пробуем ещё раз новым, а не уходим в синтез
       rec.p = fetch(url).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
-        .then((ab) => new Promise((res, rej) => { this.ctx.decodeAudioData(ab, res, rej); }))
+        .then((ab) => new Promise((res, rej) => { dc = this.ctx; dc.decodeAudioData(ab, res, rej); }))
         .then((buf) => { rec.buf = buf; this._evict(name); return buf; })
-        .catch((e) => { rec.p = null; rec.failed = true; if (window.console) console.warn('музыка ' + name + ': ' + (e && e.message || e)); return null; });
+        .catch((e) => { rec.p = null; if (dc && dc !== this.ctx && !rec.retried) { rec.retried = true; return this.preload(name); } rec.failed = true; if (window.console) console.warn('музыка ' + name + ': ' + (e && e.message || e)); return null; });
       return rec.p;
     },
     prefetch(names) { for (const n of names || []) if (FILES[n] && !this.muted && !this.musicOff) this.preload(n); },
@@ -472,8 +635,11 @@
       if (F.loop) { src.loop = true; src.loopStart = F.loop[0]; src.loopEnd = F.loop[1]; }
       g.gain.value = 0.0001;
       src.connect(g); g.connect(this.fileBus);
-      const off = o && o.skipIntro ? (F.rise || (F.loop && F.loop[0]) || 0) : 0;
-      src.start(0, off);       // skipIntro: сразу с места, где вступает главная часть (rise), иначе с начала петли
+      const off = o && o.at > 0 ? o.at : o && o.skipIntro ? (F.rise || (F.loop && F.loop[0]) || 0) : 0;
+      // at — с какого места файла (секунды от начала, петли считаются: так меряет musicTime) продолжить: пересозданный контекст в заплыве продолжает трек с того же места, а не с начала
+      let pos = off;
+      if (o && o.at > 0 && F.loop) { const a = F.loop[0], b = F.loop[1] > a ? F.loop[1] : buf.duration; if (b > a && pos >= b) pos = a + (pos - a) % (b - a); }          // петля [0, 0] — весь файл
+      src.start(0, buf.duration > 0 ? Math.min(pos, buf.duration - 0.01) : pos);       // skipIntro: сразу с места, где вступает главная часть (rise), иначе с начала петли
       const f = this.file = { name, src, g, vol: F.vol || 1, t0: c.currentTime, off, env: { t0: c.currentTime, dur: 0, from: 0.0001, to: 0.0001 } };          // t0 и off — когда и с какого места файл пошёл: по ним заплыв сверяет свои часы с музыкой (musicTime)
       // вход: заданный в o.in, иначе fade трека; начатый с главной части вступает быстрее (иначе плавный вход съел бы её начало)
       this._fade(f, f.vol, o && o.in !== undefined ? o.in : (F.fade !== undefined ? F.fade : (o && o.skipIntro ? 0.5 : XFADE.in)));

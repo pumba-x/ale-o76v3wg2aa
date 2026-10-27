@@ -142,17 +142,29 @@
     // Плотность холста. Компьютер: не больше 2. Телефон: вся плотность экрана, до 3 (владелец 15.10.2026, iPhone 16e: «качество текстурок мира и персонажей заметно хуже, чем на компьютере, будто разрешение
     // ниже; кнопки — хорошее»): у экрана iPhone плотность 3, а холст был не плотнее 2, и Safari растягивал его в 1,5 раза — картинка мягкая, тогда как экранные кнопки (DOM, значки-векторы) рисуются в родном 3×.
     // Если телефон не тянет, автоподбор (src/quality.js) снижает масштаб, но не ниже пола. `?dprmax=2` возвращает прежний потолок (для сравнения снимков).
-    dprCap(search) {
+    dprCap(search, noIntro) {
       const m = /[?&]dprmax=([\d.]+)/.exec(search === undefined ? location.search : search), touch = !!(Ale.Touch && Ale.Touch.active);
       let cap = m && +m[1] >= 1 ? +m[1] : (touch ? 3 : 2);
       // Пока идёт ловушка заставки (камера отъезжает от Алеси, 12,5 с), холст на телефоне не плотнее Title.INTRO_DPR: полный 3× рисовал её «очень лагучей» (владелец 17.10.2026), а автоподбор
       // (src/quality.js) в начале игры ничего не меняет. Меню после ловушки — снова в полную плотность (Title._endIntro зовёт resize).
       const T = Ale.Title;
-      if (touch && this.mode === 'title' && T && T.phase === 'intro' && T.INTRO_DPR) cap = Math.min(cap, T.INTRO_DPR);          // только пока игра и правда в заставке: устаревшая фаза ловушки не должна ограничивать холст в игре
+      if (!noIntro && touch && this.mode === 'title' && T && T.phase === 'intro' && T.INTRO_DPR) cap = Math.min(cap, T.INTRO_DPR);          // только пока игра и правда в заставке: устаревшая фаза ловушки не должна ограничивать холст в игре
       return cap;
     },
     // Потолок числа пикселей холста: у телефона выше (все нынешние iPhone в 3× укладываются: от 2,96 Мпикс у 16e до 3,8 у Pro Max), у больших окон прежний
     pixelCap() { return Ale.Touch && Ale.Touch.active ? this.maxPixelsTouch : this.maxPixels; },
+    // Сколько пикселей холста приходится на юнит мира, когда холст в полной плотности: без автоподбора (resScale), без ловушки заставки и при альбомном положении (на телефоне сцену могут
+    // собрать, пока он ещё стоит вертикально под подсказкой «Поверните»). По этому числу строятся слои сцен на касании (Art.layer): построенные реже экрана, они растягивались и выглядели мягко (27.10.2026).
+    nativeK(w, h, dpr) {
+      w = w === undefined ? this.cssW : w; h = h === undefined ? this.cssH : h;
+      if (!(w > 0 && h > 0)) return 0;
+      const touch = !!(Ale.Touch && Ale.Touch.active), L = touch ? Math.max(w, h) : w, S = touch ? Math.min(w, h) : h;
+      let d = Math.min(dpr === undefined ? (window.devicePixelRatio || 1) : dpr, this.dprCap(undefined, true));
+      const maxPx = this.pixelCap();
+      if (L * S * d * d > maxPx) d = Math.sqrt(maxPx / (L * S));
+      const vw = Math.round(Ale.clamp(720 * (L / S), 1000, 1700));
+      return Math.min(Math.round(L * d) / vw, Math.round(S * d) / 720);
+    },
 
     resize() {
       const vs = this.viewSize(), cssW = vs.w, cssH = vs.h;
@@ -220,7 +232,7 @@
         const raw = now - this.last;
         let dt = Math.min(0.25, raw);
         this.last = now;
-        if (!this.manual) { this._ftPush(raw); this._tuneResolution(raw); }
+        if (!this.manual) { this._ftPush(raw); this._tuneResolution(raw); if (Ale.Audio.tick) Ale.Audio.tick(dt); }          // звук: идут ли его часы, есть ли сигнал (экран диагностики, подсказка «Коснись экрана…»)
         if (this.slowT > 0) { this.slowT -= dt; dt *= this.timeScale; if (this.slowT <= 0) this.timeScale = 1; }
         this.acc += dt;
         let n = 0;
@@ -321,8 +333,8 @@
         'res ' + this.resScale.toFixed(2) + (q ? '  floor ' + q.floor + '  ' + (q.locked ? 'LOCKED' : 'auto') + '  slow ' + q.slow + ' fast ' + q.fast + '  win ' + (q.last ? (q.last.median * 1000).toFixed(1) + '/' + (q.last.p90 * 1000).toFixed(1) : '-') : ''),
         'dt p50 ' + pick(0.5) + '  p95 ' + pick(0.95) + '  max ' + pick(1) + '   >50:' + (r ? r.c50 : 0) + ' >100:' + (r ? r.c100 : 0) + ' >250:' + (r ? r.c250 : 0) + (sc ? '  scene ' + sc.c50 + '/' + sc.c100 + '/' + sc.c250 : ''),
         (() => { const ti = r && r.scenes['title:intro']; return ti && ti.n ? 'intro ' + ti.n + ' fr  avg ' + (ti.sum / ti.n * 1000).toFixed(1) + 'ms (' + (ti.n / ti.sum).toFixed(0) + ' fps)  >50:' + ti.c50 + ' >100:' + ti.c100 + ' >250:' + ti.c250 + '  cv ' + (this._introCv || '-') : null; })(),          // ловушка заставки: сколько кадров, средний fps и подвисания — видно и после неё; cv — размер холста в ловушке
-        'audio ' + (ctx ? ctx.state : 'none') + '  sess ' + (navigator.audioSession ? navigator.audioSession.type : 'none') + '  silent ' + (A && A.silent ? 1 : 0) + '  vol ' + (A ? A.vol.music + '/' + A.vol.sfx : '-') + '  music ' + (A && A.current || '-'),          // sess — тип звукового сеанса страницы (playback: звук идёт и при беззвучном режиме iPhone)
-        'layers ' + pool.layers + '/' + pool.megapixels + 'Mpx  touch ' + (Ale.Touch && Ale.Touch.active ? 1 : 0) + '  standalone ' + (standalone ? 1 : 0) + '  zoom ' + (window.visualViewport ? window.visualViewport.scale.toFixed(2) : '-') + '  secure ' + (window.isSecureContext ? 1 : 0),
+        ...(A && A.statsLines ? A.statsLines() : ['audio ' + (ctx ? ctx.state : 'none')]),          // состояние звука, сеанс, тихий канал iOS, часы и сигнал на мастер-шине, последние события (src/audio.js, «разблокировка и самопроверка»)
+        'layers ' + pool.layers + '/' + pool.megapixels + 'Mpx d≥' + (pool.minD || '-') + ' need ' + (this.nativeK ? this.nativeK().toFixed(2) : '-') + '  touch ' + (Ale.Touch && Ale.Touch.active ? 1 : 0) + '  standalone ' + (standalone ? 1 : 0) + '  zoom ' + (window.visualViewport ? window.visualViewport.scale.toFixed(2) : '-') + '  secure ' + (window.isSecureContext ? 1 : 0),
         (() => { const pr = Ale.Touch && Ale.Touch.press || { ts: 0, blocked: 0, sel: 0, ctx: 0, drag: 0 }; return 'press ' + pr.ts + '/' + pr.blocked + '  sel ' + pr.sel + ' ctx ' + pr.ctx + ' drag ' + pr.drag; })(),          // касаний / из них отменено; попытки Safari выделить, показать меню, поднять предмет (долгое нажатие)
         'ins ' + insets.map((v) => Math.round(v)).join('/') + 'pt  safe ' + safe.map((v) => Math.round(v)).join('/') + 'u  btn ' + (Ale.Touch ? Ale.Touch.variant : '-'),          // безопасные поля окна (слева/справа/сверху/снизу): что сообщает система и что осталось кадру игры
       ];
@@ -330,7 +342,7 @@
       return lines.filter((l) => l !== null);
     },
     _drawStats(ctx) {
-      const lines = this.statsLines(), fs = 14, lh = 18, w = Math.min(this.viewW - 20, 720), h = lines.length * lh + 10;
+      const lines = this.statsLines(), fs = 14, lh = 18, w = Math.min(this.viewW - 20, 1200), h = lines.length * lh + 10;
       const x = Math.round((this.viewW - w) / 2), y = this.viewH - h - 6;
       ctx.save();
       ctx.fillStyle = 'rgba(0,0,0,0.72)'; ctx.fillRect(x, y, w, h);

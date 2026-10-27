@@ -597,6 +597,24 @@
       if (this.ph) this._drawPhone(ctx, W, H);
       if (this.help) this._drawHelp(ctx, W, H);
       if (this.menu) this._drawMenu(ctx, W, H);
+      this._drawSoundHint(ctx, W, H);
+    },
+
+    // Плашка «Коснись экрана, чтобы включить звук» (27.10.2026): звук включён ползунками, но браузер его ещё не разрешил (первого касания не было — ссылка быстрого старта, возвращение со значка «Домой»,
+    // звонок прервал звук) или контекст сломался и ждёт касания, чтобы пересоздаться (Audio.needsTap). Появляется не сразу (0,6 с: звук обычно идёт с первого касания), на заставке с «Нажмите, чтобы начать» не нужна.
+    _drawSoundHint(ctx, W, H) {
+      const A = Ale.Audio, gate = Ale.Game && Ale.Game.mode === 'title' && Ale.Title && Ale.Title.phase === 'gate';
+      const want = !!(A && A.needsTap && A.needsTap()) && !gate && !(Ale.Game && Ale.Game.mode === 'loading');
+      this._sndT = want ? (this._sndT || 0) + 1 / 60 : 0;
+      if (this._sndT < 0.6) { this._sndBox = null; return; }
+      const T = Ale.T.audio.unlock, s = Ale.Touch && Ale.Touch.active ? T.touch : T.kb, a = Ale.clamp((this._sndT - 0.6) / 0.3, 0, 1);
+      ctx.save(); ctx.globalAlpha = a; ctx.font = 'bold 24px ' + Ale.FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const w = ctx.measureText(s).width + 44, h = 44, x = W / 2 - w / 2, ob = this.objective && this.objective.text ? this._objBox : null;
+      // на узком виде (1000 юн.: iPad, квадратное окно) плашка цели справа вверху заходит под середину кадра — тогда плашка звука встаёт под ней (не на обучающую панель: та ниже, с y 112)
+      const y = ob && x + w > ob.x - 8 && x < ob.x + ob.w + 8 ? Math.max(14 + (this._S().t || 0), ob.y + ob.h + 8) : 14 + (this._S().t || 0);
+      this._sndBox = { x, y, w, h, text: s };
+      rr(ctx, x, y, w, h, 22); ctx.fillStyle = 'rgba(255,246,228,0.94)'; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = OUT; ctx.stroke();
+      ctx.fillStyle = INK; ctx.fillText(s, W / 2, y + h / 2 + 1); ctx.restore();
     },
 
     _drawHud(ctx, W, H, scene) {
@@ -1128,6 +1146,12 @@
         ctx.lineWidth = 6; ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(58,36,49,0.9)'; ctx.strokeText(s, W / 2, y + 16);
         ctx.fillStyle = '#fff6e4'; ctx.fillText(s, W / 2, y + 16);
       }
+      const note = m.note ? (typeof m.note === 'function' ? m.note() : m.note) : '';
+      if (note) {
+        ctx.font = '600 20px ' + Ale.FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.lineWidth = 6; ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(58,36,49,0.9)'; ctx.strokeText(note, W / 2, y + 48);
+        ctx.fillStyle = '#ffe2b0'; ctx.fillText(note, W / 2, y + 48);
+      }
       if (m.legend) this._drawLegend(ctx, W, H);
     },
 
@@ -1136,7 +1160,7 @@
       const A = Ale.Audio, T = Ale.T.audio;
       const slider = (kind, label) => ({ label, slider: { get: () => A.vol[kind], set: (v) => A.setVolume(kind, v), step: 0.05, toggle: () => A.toggleMute(kind), preview: kind === 'sfx' } });
       this.openMenu([slider('music', T.music), slider('sfx', T.sfx), { label: T.back, action: () => onBack() }],
-        Object.assign({ title: T.title, w: 700, onBack: () => onBack(), hint: () => Ale.tx(T.hint), hideTouch: true }, opts));       // hideTouch: экранные кнопки на время окна убираются, чтобы не перекрывать полоски
+        Object.assign({ title: T.title, w: 700, onBack: () => onBack(), hint: () => Ale.tx(T.hint), note: () => (A._ios && A._ios() ? T.phoneMute : ''), hideTouch: true }, opts));          // note — строка про бесшумный режим (только на iPhone и iPad)       // hideTouch: экранные кнопки на время окна убираются, чтобы не перекрывать полоски
     },
 
     // Короткая памятка по управлению слева от меню паузы (полное окно — пункт «Как играть»).

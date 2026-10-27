@@ -12,15 +12,32 @@
   // Плотность больших слоёв. На настольных экранах с высокой плотностью пикселей («сетчатка») фон, построенный с 1,4 пикс/юн., растягивается в полтора раза
   // и выглядит мягким (вывески, оконные переплёты, швы кладки). Поэтому большие слои (> 1,2 млн юн²) строятся плотнее, до 1,45× от заказанного и до 2 пикс/юн.,
   // но не выше 13 Мпикс на слой. На телефонах и планшетах (включено сенсорное управление) слои остаются лёгкими: память Safari на iOS ограничена.
+  // 27.10.2026, телефон (владелец, iPhone 16e со значка «Домой»: «картинка размытая, будто не то разрешение»): у экрана телефона холст — 1,4 (вкладка Safari) … 1,64 (значок «Домой», iPhone 14 Pro)
+  // пикселя на юнит, а слои сцен строились по заказу сцены — 1,05…1,5 пикс/юн., у Монако, парка Киева и реки ещё ×0,8 (1,2 / 0,8): проба tests/_dens_probe.html (вид 844×390, плотность 3) показала,
+  // что на всех местах, кроме ASSAS, 89–100 % площади слоёв мельче экрана, в среднем 1,1–1,3 пикс/юн. (скачка 1,09, переход Киева 1,10), то есть фон растягивался в 1,25–1,5 раза; у значка «Домой»
+  // страница выше, чем во вкладке (390 pt против 336), и растяжение ещё на 16 % больше — отсюда «в ярлыке хуже». Теперь на касании слой строится не реже экрана (Game.nativeK — плотность, которую холст
+  // имеет без автоподбора и без ловушки заставки), но не плотнее 2,2 пикс/юн., не больше 13 Мпикс на слой, а все слои сцены — не больше TOUCH_BUDGET пикселей (память Safari на iOS): что не влезает,
+  // строится реже, но не реже, чем заказала сцена.
+  const TOUCH_BUDGET = 5.2e7;
   function density(w, h, s) {
     const G = Ale.Game;
-    if (!G || !(G.k > 0) || (Ale.Touch && Ale.Touch.active) || w * h < 1.2e6) return s;
+    if (Ale.Touch && Ale.Touch.active) {
+      const t = G && G.nativeK ? G.nativeK() : 0;
+      if (!(t > s)) return s;
+      let d = Math.min(t, 2.2, Math.sqrt(1.3e7 / (w * h)));
+      const used = poolPx(), room = TOUCH_BUDGET - used;
+      if (w * h * d * d > room) d = room > 0 ? Math.sqrt(room / (w * h)) : s;
+      return Math.max(s, d);
+    }
+    if (!G || !(G.k > 0) || w * h < 1.2e6) return s;
     return Math.max(s, Math.min(2, G.k * 0.9, s * 1.45, Math.sqrt(1.3e7 / (w * h))));
   }
+  function poolPx() { let px = 0; for (const c of pool) px += c.width * c.height; return px; }
   function layer(w, h, fn, scale) {
     const s = density(w, h, scale || 2);
     const c = document.createElement('canvas');
     c.width = Math.max(1, Math.ceil(w * s)); c.height = Math.max(1, Math.ceil(h * s));
+    c.__d = s;                 // плотность слоя (пикс/юн.): экран диагностики показывает самую низкую среди слоёв сцены
     const g = c.getContext('2d');
     g.scale(s, s);
     fn(g, w, h);
@@ -30,7 +47,7 @@
   // Слои сцены освобождаются при уходе из неё: Safari на iPhone держит память холстов до сборки мусора и может упасть.
   function releaseAll() { for (const c of pool) { c.width = 0; c.height = 0; } pool.length = 0; }
   function persistent(fn) { keep = true; try { return fn(); } finally { keep = false; } }
-  function poolSize() { let px = 0; for (const c of pool) px += c.width * c.height; return { layers: pool.length, megapixels: +(px / 1e6).toFixed(1) }; }
+  function poolSize() { let px = 0, minD = 0; for (const c of pool) { px += c.width * c.height; if (c.__d && (!minD || c.__d < minD)) minD = c.__d; } return { layers: pool.length, megapixels: +(px / 1e6).toFixed(1), minD: +minD.toFixed(2) }; }
   function blit(ctx, l, x, y) { ctx.drawImage(l.c, x, y, l.w, l.h); }
   // Рисует слой так, чтобы его левый край был в экранной точке sx (вид: 0..viewW); только видимая часть.
   function blitView(ctx, l, sx, sy, viewW) {
