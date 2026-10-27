@@ -49,9 +49,10 @@
       ctx.fillStyle = K.road; ctx.fillRect(0, 568, W, H - 568);
       ctx.fillStyle = K.edge; ctx.fillRect(0, 568, W, 6);
       ctx.fillStyle = K.dash; const dash = (t * 460) % 150; for (let x = -150 + dash; x < W; x += 150) ctx.fillRect(x, 652, 80, 7);
-      // фонари вдоль дороги пролетают
-      for (let i = 0; i < 4; i++) {
-        const lx = ((i * 320 - t * 340) % 1280 + 1280) % 1280 - 140;
+      // фонари вдоль дороги пролетают; ряд замкнут по ширине кадра с запасом за обоими краями (был по 1280: на виде шире 1420 юнитов фонарь рождался посреди кадра, а правее 1140 их не было вовсе — 27.10.2026)
+      const span = Math.ceil((W + 280) / 320) * 320;
+      for (let i = 0; i < span / 320; i++) {
+        const lx = ((i * 320 - t * 340) % span + span) % span - 140;
         ctx.fillStyle = K.pole; ctx.fillRect(lx - 3, 410, 6, 160); ctx.fillRect(lx - 3, 410, 38, 6);
         if (K.glow) A.glow(ctx, lx + 34, 420, 70, 'rgba(255,214,140,', K.glow);
       }

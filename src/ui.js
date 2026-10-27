@@ -772,14 +772,22 @@
       ctx.restore();
     },
 
-    _drawObjective(ctx, W) {
+    // Где стоит плашка цели (без выезда сверху): одна геометрия для рисования и для тех, кому нужно держаться от плашки подальше (полоса пути скачки, src/scenes/ride.js)
+    _objectiveRect(ctx, W) {
       const o = this.objective;
-      if (!o.text) return;
-      const a = Ale.clamp(o.t / 0.4, 0, 1);
+      if (!o.text) return null;
       ctx.font = 'bold 22px ' + Ale.FONT;
       const tw = ctx.measureText(o.text).width;
       const rsv = Ale.Touch && Ale.Touch.active ? Math.max(22, Ale.Touch.reserve || 0) : 22;       // на касании в правом верхнем углу стоит «II»: плашка цели сдвигается влево от неё
-      const w = tw + 44, h = 40, x = W - w - rsv - this._S().r, y = 20 - (1 - Ale.ease.outCubic(a)) * 60;
+      const w = tw + 44;
+      return { x: W - w - rsv - this._S().r, y: 20, w, h: 40 };
+    },
+
+    _drawObjective(ctx, W) {
+      const o = this.objective, R = this._objectiveRect(ctx, W);
+      if (!R) return;
+      const a = Ale.clamp(o.t / 0.4, 0, 1);
+      const w = R.w, h = R.h, x = R.x, y = R.y - (1 - Ale.ease.outCubic(a)) * 60;
       this._objBox = { x, y, w, h };                                                // где плашка нарисована (для проверок)
       ctx.globalAlpha = 0.92;
       rr(ctx, x, y, w, h, 20); ctx.fillStyle = 'rgba(40,24,38,0.78)'; ctx.fill();
@@ -1184,8 +1192,13 @@
       for (const [caps, label] of rows) {
         let x = px + 20;
         for (const c of caps) { x += this._miniCap(ctx, x, y + 6, c) + 5; }
-        ctx.textAlign = 'left'; ctx.font = 'bold 21px ' + Ale.FONT; ctx.fillStyle = INK;
-        ctx.fillText(label, px + 20 + 106, y + rowH / 2);
+        ctx.textAlign = 'left'; ctx.fillStyle = INK;
+        // название оружия в бою с Димасиком («Шар для боулинга» — 187 юн. при 132 свободных) вылезало за карточку на тёмный фон (27.10.2026): сначала чуть мельче, потом левее, но не ближе 10 к кнопкам
+        const maxX = px + pw - 14, col = px + 20 + 106;
+        let fs = 21; ctx.font = 'bold ' + fs + 'px ' + Ale.FONT;
+        let tw = ctx.measureText(label).width, lx = col;
+        if (lx + tw > maxX) { fs = Math.max(17, Math.floor(21 * (maxX - lx) / tw)); ctx.font = 'bold ' + fs + 'px ' + Ale.FONT; tw = ctx.measureText(label).width; lx = Math.max(x + 5, Math.min(col, maxX - tw)); }
+        ctx.fillText(label, lx, y + rowH / 2);
         y += rowH;
       }
     },

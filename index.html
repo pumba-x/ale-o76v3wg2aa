@@ -128,6 +128,13 @@
     #install .in-card-btns { flex-direction: row; }
     #install .in-card-btns .in-btn { flex: 1 1 0; }
   }
+  /* совсем низкая страница (Safari с полосой вкладок на iPhone с экраном 375 px высотой: SE, X, XS, 11 Pro, 12 / 13 mini — 265 px; 27.10.2026): у слайда «Открой игру в Safari» кнопка «Скопировать ссылку» уходила под край на 20–23 px */
+  @media (orientation: landscape) and (max-height: 300px) {
+    #install .in-copy p { font-size: clamp(12px, 2.1vw, 14px); line-height: 1.28; }
+    #install .in-copy h2 { font-size: clamp(16px, 2.8vw, 20px); margin-bottom: 2px; }
+    #install .in-copyb { margin-top: 5px; min-height: 36px; font-size: 15px; }
+    #install .in-dots { padding: 2px 0; }
+  }
   /* подсказка про экран «Домой» (только iPhone в Safari, титульное меню) */
   #a2hs { position: fixed; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 19; display: none; align-items: flex-end; justify-content: center; }
   body.touch-ui.a2hs-show #a2hs { display: flex; }

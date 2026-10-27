@@ -281,8 +281,14 @@
   // Полоса прогресса пути: Париж → аэропорт с башней и аркой по дороге.
   function drawProgress(ctx, game, sc) {
     const r = sc.player; if (!r || sc.hideProgress) return;
-    const W = game.viewW, w = Math.min(460, W - 520), x = W / 2 - w / 2, y = 30, k = Ale.clamp(r.x / LEN, 0, 1);
+    const W = game.viewW, y = 30, k = Ale.clamp(r.x / LEN, 0, 1);
     ctx.save();
+    // Полоса стоит по центру, но не заходит ни под сердца слева, ни под плашку цели справа (27.10.2026: на iPhone SE и в узких окнах плашка «Доскакать до аэропорта» закрывала значок самолёта на конце, на 14 Pro и новее
+    // касалась полосы): ширина — по тому, что ближе к центру
+    const UI = Ale.UI, S = UI._S ? UI._S() : { l: 0 }, st = game.state, ob = UI._objectiveRect ? UI._objectiveRect(ctx, W) : null;
+    const left = S.l + 26 + 42 * (((st && st.maxHp) || 5) - 1) + 19 + 16, right = ob ? ob.x - 16 : W - 24;
+    const w = Ale.clamp(Math.min(460, W - 520, 2 * Math.min(W / 2 - left, right - W / 2) - 24), 140, 460), x = W / 2 - w / 2;
+    sc.progressBox = { x: x - 12, y: y - 14, w: w + 24, h: 32 };                         // где полоса нарисована (для проверок)
     Ale.rr(ctx, x - 12, y - 14, w + 24, 32, 16); ctx.fillStyle = 'rgba(40,24,38,0.7)'; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,220,170,0.5)'; ctx.stroke();
     ctx.lineCap = 'round'; ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(255,246,228,0.25)'; ctx.beginPath(); ctx.moveTo(x, y + 2); ctx.lineTo(x + w, y + 2); ctx.stroke();
     ctx.strokeStyle = '#ffb45a'; ctx.beginPath(); ctx.moveTo(x, y + 2); ctx.lineTo(x + w * k, y + 2); ctx.stroke();
